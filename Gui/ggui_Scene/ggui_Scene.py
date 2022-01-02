@@ -22,18 +22,20 @@ class gguiScene:
         self.camera.lookat(0.5, 0.3, 0.5)
         self.camera.fov(55)
         self.objects = objects
+        self.isPause = False
 
     def show_options(self):
         self.window.GUI.begin("Options", 0.05, 0.45, 0.2, 0.4)
         if self.window.GUI.button("restart"):
             self.objects.init()
-        if self.paused:
+        if self.isPause:
             if self.window.GUI.button("Continue"):
-                paused = False
+                self.isPause = False
         else:
             if self.window.GUI.button("Pause"):
-                self.paused = True
+                self.isPause = True
         self.window.GUI.end()
+        self.objects.isPause = self.isPause
 
     def render(self):
         self.camera.track_user_inputs(self.window, movement_speed=0.03,hold_key=ti.ui.RMB)
@@ -42,6 +44,8 @@ class gguiScene:
         self.scene.ambient_light((1, 1, 1))
 
         self.scene.particles(self.objects.positions,  radius = self.particles_radius)
+
+        #self.scene.mesh(vertices=self.objects.fluid_surface_solver.explicit_triangles, indices=self.objects.fluid_surface_solver.triangles_indices)
 
         self.scene.point_light(pos=(0.5, 1.5, 0.5), color=(0.5, 0.5, 0.5))
         self.scene.point_light(pos=(0.5, 1.5, 1.5), color=(0.5, 0.5, 0.5))

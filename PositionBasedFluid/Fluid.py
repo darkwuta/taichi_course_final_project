@@ -1,6 +1,7 @@
 import math
 
 import taichi as ti
+
 #import Exporter as ex
 import numpy as np
 ti.init(arch=ti.gpu)
@@ -11,18 +12,21 @@ ti.init(device_memory_fraction=0.9)
 @ti.data_oriented
 class PBFFluidSim3D:
     def __init__(self,
-                 num_particles = 5000,
+                 num_particles = 10240,
                  max_timesteps = 10,
-                 time_delta=0.1,
-                 BaseSpaceReslution = (200,200,200),
+                 time_delta=1.0 / 20.0,
+                 BaseSpaceReslution = 400,
                  #boundary = (400, 400, 400),
-                 screen_to_world_ratio=10.0,
                  gui = None,
                  do_render = False,
                  render_save_dir = "./output"
                  ):
-        self.dim = 3
+
+
+        self.isPause = False
+        self.base_size_factor = 400
         self.scaling_size_factor = 1
+        self.dim = 3
         self.particles_color = 0x068587
         self.boundary_color = 0xebaca2
         self.background_color = 0x112f41
@@ -31,15 +35,15 @@ class PBFFluidSim3D:
         self.do_render = do_render
         self.render_save_dir = render_save_dir
 
-        self.SpaceResolution = np.array([1, 1, 1]) * BaseSpaceReslution * self.scaling_size_factor
-        self.screen_to_world_ratio = screen_to_world_ratio
+        self.SpaceResolution = np.array([1, 1, 1]) * self.base_size_factor * self.scaling_size_factor
+        self.screen_to_world_ratio = 10.0 * self.scaling_size_factor
         self.boundary = self.SpaceResolution / self.screen_to_world_ratio
         self.SpaceResolution_reciprocal = 1/self.SpaceResolution[0], 1/self.SpaceResolution[1], 1/self.SpaceResolution[2]
 
         self.cell_size = 2.51 / self.scaling_size_factor
         self.cell_reciprocal = 1.0 / self.cell_size
 
-        # TODO 这部分不太懂
+        # 向上取整
         def round_up(f, s):
             return (math.floor(f * self.cell_reciprocal / s)+1)*s
 
@@ -68,8 +72,8 @@ class PBFFluidSim3D:
         self.rho0 = 1.0
         self.lambda_epsilon = 100
         self.vorticity_epsilon = 0.01
-        self.viscosity_c = 0.1
-        self.pbd_num_iters = 10
+        self.viscosity_c = 0.01
+        self.pbd_num_iters = 5
         self.corr_deltaQ_coeff = 0.3
         self.corrK = 0.001
 
@@ -105,31 +109,30 @@ class PBFFluidSim3D:
 
         print(f'boundary={self.boundary} grid{self.grid_size} cell_size={self.cell_size}')
 
+    # 初始化碰撞检测类的顶点信息和顶点坐标信息
+    def init_surface(self):
+        # 将numpy数组转为field
+        self.fluid_surface_solver.init_field()
+        # 初始化之后的赋值
+        self.fluid_surface_solver.numpy_to_field()
+
     def place_vars(self):
-        # ti.root.dense(ti.i, self.num_particles).place(self.total_pos_delta)
         ti.root.dense(ti.i, self.num_particles).place(self.old_positions, self.positions, self.velocities)
         ti.root.dense(ti.i, self.num_particles).place(self.lambdas, self.position_deltas)
 
         grid_snode = ti.root.dense(ti.ijk, self.grid_size)
         grid_snode.place(self.grid_num_particles)
         grid_snode.dense(ti.l, self.max_num_particles_per_cell).place(self.grid2particles)
-        #ti.root.dense(ti.ijk, self.grid_size).place(self.grid_num_particles)
-        #ti.root.dense(ti.ijk, self.grid_size).dense(ti.l, self.num_particles).place(self.grid2particles)#grid2particles是一种索引，指某个网格对于的粒子的index
-        #
+
         nb_node = ti.root.dense(ti.i, self.num_particles)
         nb_node.place(self.particles_num_neighbors)
         nb_node.dense(ti.j, self.max_num_neighbors).place(self.particles_neighbors)#particles_neighbors存储每个粒子的200个邻居的索引
-        #
+
         ti.root.dense(ti.i, self.num_particles).place(self.lambdas_grad_i)
         ti.root.dense(ti.i, self.num_particles).place(self.lambdas_sum_gradient_sqr_i)
         ti.root.dense(ti.i, self.num_particles).place(self.lambdas_density_constraints_i)
-        #
         ti.root.place(self.board_states)
-        #
-        # ti.root.dense(ti.i,self.num_particles).place(self.pos_bound_offset)
-        #
-        # ti.root.place(self.target)
-        # ti.root.place(self.loss)
+
         ti.root.lazy_grad()
 
 
@@ -357,11 +360,11 @@ class PBFFluidSim3D:
     def move_board(self, frame:ti.i32):
         b = self.board_states[None]
         period = 90
-        vel_strength = 3.0
+        vel_strength = 8.0
         b[1] += 1.0
         if b[1] >= 2*period:
             b[1] = 0
-        b[0] += -ti.sin(b[1] * np.pi / 90) * vel_strength * self.time_delta
+        b[0] += -ti.sin(b[1] * np.pi / period) * vel_strength * self.time_delta
         self.board_states[None] = b
         #print("DEBUG::self.board_states[None]", self.board_states[None])
 
@@ -379,30 +382,32 @@ class PBFFluidSim3D:
         for pos in pos_np:
             for j in range(self.dim):
                     pos[j] *= ratio
+
         self.gui.circles(pos_np[:, [0, 1]], radius=3, color=self.particles_color)
         self.gui.show()
 
     def run_pbf(self, frame):
-        self.swap_buffer(frame)
-        self.apply_gravity_within_boundary(frame)
+        if not self.isPause:
+            self.swap_buffer(frame)
+            self.apply_gravity_within_boundary(frame)
 
-        # clear grid
-        self.grid_num_particles.fill(0)
-        self.particles_neighbors.fill(-1)
+            # clear grid
+            self.grid_num_particles.fill(0)
+            self.particles_neighbors.fill(-1)
 
-        self.update_grid(frame)
-        self.find_particle_neighbors(frame)
+            self.update_grid(frame)
+            self.find_particle_neighbors(frame)
 
-        for _ in range(self.pbd_num_iters):
-            self.compute_lambdas(frame)
-            self.compute_position_deltas(frame)
-            self.apply_position_deltas(frame)
+            for _ in range(self.pbd_num_iters):
+                self.compute_lambdas(frame)
+                self.compute_position_deltas(frame)
+                self.apply_position_deltas(frame)
 
-        self.confine_to_boundary()
+            self.confine_to_boundary()
 
-        self.update_velocities(frame)
+            self.update_velocities(frame)
 
-        #self.vorticity_confinement(frame)
+            #self.vorticity_confinement(frame)
 
-        self.apply_XSPH_viscosity(frame)
+            self.apply_XSPH_viscosity(frame)
 

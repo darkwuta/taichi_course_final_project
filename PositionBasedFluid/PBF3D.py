@@ -9,6 +9,7 @@ def main():
     scene = gguiScene(res =screen_resolution, objects = pbfFluid)
     pbfFluid.init()
 
+
     frame = 0
     while scene.window.running:
         frame += 1
