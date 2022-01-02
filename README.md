@@ -17,13 +17,13 @@
 
 ## 运行方式
 #### 运行环境：
-> [Taichi] version 0.8.5, llvm 10.0.0, commit 45c6ad48, win, python 3.8.1
+[Taichi] version 0.8.5, llvm 10.0.0, commit 45c6ad48, win, python 3.8.1
 
 #### 运行：
-> 运行PositionBasedFluid/PDF3D.py
+运行PositionBasedFluid/PDF3D.py
 
 ## 效果展示
-> 
+![demo](image/demo.gif)
 
 ## 整体结构
 ```
